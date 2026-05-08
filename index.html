@@ -3,88 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 MQTT 控制面板</title>
+    <title>ESP32 簡單控制</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
-        button { padding: 15px 30px; font-size: 20px; cursor: pointer; margin: 10px; }
-        .status { font-size: 24px; font-weight: bold; color: #333; margin-top: 20px; }
+        /* 深黑色背景與簡約風格 */
+        body { 
+            background-color: #121212; 
+            color: white; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        h1 { margin-bottom: 40px; font-weight: 300; letter-spacing: 2px; }
+
+        /* 連線狀態指示燈 */
+        .status-container {
+            margin-bottom: 30px;
+            padding: 10px 20px;
+            border-radius: 50px;
+            background: #1e1e1e;
+            font-size: 14px;
+        }
+        #status-dot {
+            height: 10px;
+            width: 10px;
+            background-color: #ff4444; /* 預設紅色 (斷線) */
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+
+        /* 按鈕設計 */
+        .btn-group { display: flex; gap: 20px; }
+        button {
+            padding: 20px 40px;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+        }
+        .btn-on { background-color: #00c853; color: white; }
+        .btn-off { background-color: #ff3d00; color: white; }
+        button:active { transform: scale(0.95); opacity: 0.8; }
+
+        /* 底部資訊 */
+        .info { margin-top: 50px; color: #666; font-size: 12px; }
     </style>
 </head>
 <body>
 
-    <h1>ESP32 遠端控制</h1>
-    
-    <div>
-        <h3>控制 ESP32 LED</h3>
-        <button onclick="sendLedCommand('ON')">打開 LED</button>
-        <button onclick="sendLedCommand('OFF')">關閉 LED</button>
+    <h1>ESP32 控制面板</h1>
+
+    <div class="status-container">
+        <span id="status-dot"></span>
+        <span id="status-text">正在連線至伺服器...</span>
     </div>
 
-    <div>
-        <h3>ESP32 實體按鈕狀態</h3>
-        <div class="status" id="buttonStatus">等待狀態更新...</div>
+    <div class="btn-group">
+        <button class="btn-on" onclick="sendMsg('ON')">打開 LED</button>
+        <button class="btn-off" onclick="sendMsg('OFF')">關閉 LED</button>
     </div>
+
+    <div class="info" id="btn-feedback">等待操作...</div>
 
     <script>
-        // MQTT 伺服器設定 (使用 EMQX 公共伺服器)
+        // --- 設定區 ---
         const broker = "broker.emqx.io";
-        const port = 8084; // 8084 是 WSS (WebSocket Secure) 加密通訊埠
-        const clientId = "web_client_" + Math.random().toString(16).substr(2, 8);
-        
-        // 定義通訊主題 (Topic)
-        const topicLedControl = "myhome/esp32/led";
-        const topicButtonStatus = "myhome/esp32/button";
+        const port = 8084;
+        const topic = "myhome/esp32/led"; // 必須與 ESP32 程式碼中的 topicLedControl 一致
+        const clientID = "web_" + Math.random().toString(16).substr(2, 8);
 
-        // 建立 MQTT 客戶端
-        const client = new Paho.MQTT.Client(broker, port, clientId);
+        // 初始化 MQTT 客戶端
+        const client = new Paho.MQTT.Client(broker, port, clientID);
 
-        client.onConnectionLost = onConnectionLost;
-        client.onMessageArrived = onMessageArrived;
-
-        // 連線設定 (啟用 SSL)
-        const options = {
-            useSSL: true, // 關鍵：啟用 WSS 加密連線
-            timeout: 3,
-            onSuccess: onConnect,
-            onFailure: onFailure
-        };
-
-        console.log("正在連線到 MQTT 伺服器...");
-        client.connect(options);
-
+        // 連線成功回呼
         function onConnect() {
-            console.log("MQTT 連線成功！(已加密)");
-            // 訂閱 ESP32 按鈕狀態主題
-            client.subscribe(topicButtonStatus);
+            document.getElementById("status-dot").style.backgroundColor = "#00c853";
+            document.getElementById("status-text").innerText = "已連線至 MQTT";
+            console.log("Connected");
         }
 
-        function onFailure(message) {
-            console.error("連線失敗: " + message.errorMessage);
+        // 連線失敗或中斷回呼
+        function onFail(err) {
+            document.getElementById("status-dot").style.backgroundColor = "#ff4444";
+            document.getElementById("status-text").innerText = "連線失敗";
         }
 
-        function onConnectionLost(responseObject) {
-            if (responseObject.errorCode !== 0) {
-                console.warn("連線中斷: " + responseObject.errorMessage);
-            }
-        }
+        // 執行連線
+        client.connect({
+            useSSL: true,
+            onSuccess: onConnect,
+            onFailure: onFail
+        });
 
-        // 接收到 MQTT 訊息時觸發
-        function onMessageArrived(message) {
-            if (message.destinationName === topicButtonStatus) {
-                document.getElementById("buttonStatus").innerText = "按鈕狀態: " + message.payloadString;
-            }
-        }
-
-        // 發送控制 LED 的指令
-        function sendLedCommand(state) {
+        // 發送訊息功能
+        function sendMsg(state) {
             if (client.isConnected()) {
                 const message = new Paho.MQTT.Message(state);
-                message.destinationName = topicLedControl;
+                message.destinationName = topic;
                 client.send(message);
-                console.log("已發送指令: " + state);
+                document.getElementById("btn-feedback").innerText = "已發送: " + state;
             } else {
-                alert("尚未連線到 MQTT 伺服器");
+                alert("目前未連線，請重新整理網頁");
             }
         }
     </script>
